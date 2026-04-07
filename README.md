@@ -47,11 +47,17 @@ Each cat has 368 hand-drawn sprites across 8 directions:
 
 ## Build & Run
 
-```bash
-# Compile (one command)
-swiftc -O -o cat cat.swift -framework AppKit -framework Foundation
+### As .app bundle (recommended)
 
-# Run
+```bash
+./build.sh
+open CATAI.app
+```
+
+### As standalone binary
+
+```bash
+swiftc -O -o cat cat.swift -framework AppKit -framework Foundation
 ./cat
 ```
 

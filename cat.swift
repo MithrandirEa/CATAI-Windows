@@ -1219,13 +1219,18 @@ class CatAppDelegate: NSObject, NSApplicationDelegate {
     var timers: [Timer] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Resolve paths
-        let exec = CommandLine.arguments[0]
+        // Resolve paths — check inside .app bundle first, then next to executable
         let base: String
-        if exec.hasPrefix("/") { base = (exec as NSString).deletingLastPathComponent }
-        else {
-            let cwd = FileManager.default.currentDirectoryPath
-            base = ((cwd as NSString).appendingPathComponent(exec) as NSString).deletingLastPathComponent
+        if let resPath = Bundle.main.resourcePath,
+           FileManager.default.fileExists(atPath: (resPath as NSString).appendingPathComponent("cute_orange_cat")) {
+            base = resPath
+        } else {
+            let exec = CommandLine.arguments[0]
+            if exec.hasPrefix("/") { base = (exec as NSString).deletingLastPathComponent }
+            else {
+                let cwd = FileManager.default.currentDirectoryPath
+                base = ((cwd as NSString).appendingPathComponent(exec) as NSString).deletingLastPathComponent
+            }
         }
         catDir = (base as NSString).appendingPathComponent("cute_orange_cat")
         let metaPath = (catDir as NSString).appendingPathComponent("metadata.json")
