@@ -1,0 +1,48 @@
+[package]
+name = "catai"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[[bin]]
+name = "catai"
+path = "src/main.rs"
+
+[dependencies]
+image = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", features = ["stream", "json"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
+
+[dependencies.windows]
+version = ">=0.59, <=0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[build-dependencies]
+winres = "0.1"
+
+[profile.dev]
+opt-level = 1          # Accélère le décodage PNG et le tinting HSB en mode debug
+
+[profile.dev.package."image"]
+opt-level = 3          # image crate optimisé même en dev (décodage PNG >> plus rapide)
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1

@@ -1,22 +1,25 @@
-# CATAI
+# CATAI — Windows Port
 
-Virtual desktop pet cats for macOS — pixel art cats that live on your dock and chat with you via Ollama LLM.
+> **Windows port of [CATAI](https://github.com/wil-pe/CATAI) — pixel art desktop cats that live on your taskbar and chat via Ollama.**
+>
+> The original project, concept, pixel art sprites, and animations are the work of **[wil-pe](https://github.com/wil-pe)**.
+> This repository is a full rewrite in **Rust + windows-rs**, targeting Windows 10/11.
 
-![Swift](https://img.shields.io/badge/Swift-native-orange) ![macOS](https://img.shields.io/badge/macOS-14%2B-blue) ![Ollama](https://img.shields.io/badge/Ollama-LLM-green)
+![Rust](https://img.shields.io/badge/Rust-stable-orange) ![Windows](https://img.shields.io/badge/Windows-10%2B-blue) ![Ollama](https://img.shields.io/badge/Ollama-LLM-green)
 
-![CATAI Screenshot](screenshot.jpeg)
+## What is CATAI?
+
+Virtual desktop pet cats that walk along your Windows taskbar, sit on top of active windows, and chat with you through a local LLM ([Ollama](https://ollama.ai)).
 
 ## Features
 
-- **Dock companion** — Cats walk along your dock with pixel-perfect animations
-- **Window perching** — When dock auto-hides, cats teleport to sit on top of your active window
+- **Taskbar companion** — Cats walk along your taskbar (bottom, top, left or right side)
+- **Window perching** — Cats sit on top of your active window when the taskbar auto-hides
 - **Multi-cat** — Up to 6 cats with distinct colors and personalities
 - **AI chat** — Click a cat to open a pixel-art chat bubble, powered by [Ollama](https://ollama.ai)
-- **Random meows** — Cats spontaneously say "Miaou~", "Prrr...", "Mrrp!" in cute speech bubbles
-- **Pixel art UI** — Settings panel, chat bubbles, and controls all in retro pixel style
-- **Menu bar icon** — 🐱 icon with quick access to settings and quit
-- **Retina ready** — Nearest-neighbor scaling keeps pixel art crisp on HiDPI displays
-- **Multilingual** — French, English, Spanish (switch with flag buttons)
+- **Random meows** — Cats spontaneously say "Miaou~", "Prrr...", "Mrrp!" in speech bubbles
+- **System tray icon** — Quick access to settings and quit
+- **Multilingual** — French, English, Spanish
 
 ## Cat Personalities
 
@@ -31,83 +34,85 @@ Virtual desktop pet cats for macOS — pixel art cats that live on your dock and
 
 ## Animations
 
-Each cat has 368 hand-drawn sprites across 8 directions:
+Each cat has 368 AI-generated sprites across 8 directions:
 
 - **Walking** — 8 frames per direction
 - **Eating** — 11 frames per direction
 - **Drinking** — 8 frames per direction
 - **Angry** — 9 frames per direction
 - **Waking up** — 9 frames per direction
-- **Idle / Sleeping** — Static rotation sprites
+- **Idle** — Static rotation sprites
 
 ## Requirements
 
-- macOS 14+ (Apple Silicon or Intel)
-- [Ollama](https://ollama.ai) running locally (for chat feature, optional)
+- Windows 10 or 11 (x64)
+- [Ollama](https://ollama.ai) running locally (optional, for chat feature)
 
 ## Build & Run
 
-### Download pre-built app
+### Download pre-built release
 
-Grab `CATAI.zip` from [Releases](https://github.com/wil-pe/CATAI/releases), unzip, then:
+Grab `CATAI-x.x.x.zip` from [Releases](https://github.com/wil-pe/CATAI/releases), unzip, then run `catai.exe`.
 
-```bash
-xattr -cr CATAI.app   # remove macOS quarantine (app is unsigned)
-open CATAI.app
-```
+The `cute_orange_cat/` folder must stay **next to** `catai.exe`.
 
 ### Build from source
 
-```bash
-./build.sh
-open CATAI.app
+```powershell
+# Requires Rust stable (x86_64-pc-windows-msvc)
+cargo build --release
 ```
 
-### As standalone binary
+Output: `target\release\catai.exe`
 
-```bash
-swiftc -O -o cat cat.swift -framework AppKit -framework Foundation
-./cat
+### Package (exe + assets → ZIP)
+
+```powershell
+.\package.ps1 -Version "1.0.0"
+# Produces: dist\CATAI-1.0.0.zip
 ```
-
-No Xcode project, no dependencies, no package manager — just one Swift file.
 
 ## Settings
 
-Click the 🐱 menu bar icon → Settings:
+Click the 🐱 system tray icon → Settings:
 
 - **Language** — 🇫🇷 🇬🇧 🇪🇸 click a flag to switch
 - **Cats** — Click a color bubble to add a cat, click × to remove
 - **Name** — Rename each cat
-- **Size** — Pixel art slider to scale cats
+- **Size** — Slider to scale cats (0.5× – 3.0×)
 - **Ollama model** — Select from your installed models
 
 ## How It Works
 
-- Single native Swift file (~1500 lines), no external dependencies
-- `NSWindow` with transparent background for overlay rendering
-- `CGWindowListCopyWindowInfo` for detecting frontmost windows
-- Dock auto-hide detection via mouse position polling at 30 FPS
-- Color tinting via direct pixel manipulation in sRGB `CGContext`
-- Ollama streaming chat via `URLSessionDataDelegate`
-- Conversation memory persisted in `UserDefaults`
+- Native Win32 application, no UI framework
+- `WS_EX_LAYERED` transparent windows rendered via `UpdateLayeredWindow`
+- Per-pixel BGRA premultiplied bitmaps rendered with GDI `CreateDIBSection`
+- HSB color tinting applied directly on sprite pixels at load time
+- Ollama streaming chat via `reqwest` + `tokio`
+- Conversation memory persisted as JSON in `%APPDATA%\CATAI\`
 
 ## Project Structure
 
 ```
 .
-├── cat.swift              # Entire application (single file)
-├── cat                    # Compiled binary
-└── cute_orange_cat/       # Sprite assets
-    ├── metadata.json      # Animation & rotation definitions
-    ├── rotations/         # 8 static direction sprites (68x68 PNG)
-    └── animations/        # 5 animations × 8 directions × 8-11 frames
-        ├── angry/
-        ├── drinking/
-        ├── eating/
-        ├── running-8-frames/
-        └── waking-getting-up/
+├── src/
+│   ├── main.rs            # Win32 message loop + tokio runtime
+│   ├── app.rs             # Global AppState
+│   ├── cat/               # CatInstance, state machine, animation, sprite
+│   ├── ui/                # Layered windows, tray, chat bubble, settings
+│   ├── system/            # Taskbar detection, window perching, mouse hook
+│   ├── ollama/            # Streaming HTTP client
+│   └── config/            # Persistence (JSON) + l10n
+├── cute_orange_cat/        # Sprite assets (from the original project)
+│   ├── metadata.json
+│   ├── rotations/
+│   └── animations/
+└── package.ps1             # Packaging script
 ```
+
+## Credits
+
+Sprites, animations, original concept and macOS implementation by **[wil-pe](https://github.com/wil-pe)** — [original CATAI project](https://github.com/wil-pe/CATAI).
 
 ## License
 

@@ -1,7 +1,10 @@
-# Compiled binary
-cat
-CATAI.app/
-CATAI.icns
-CATAI.iconset/
+# Rust build output
+target/
+dist/
+
+# Cargo lock — à conserver pour les binaires
+# Cargo.lock
+
+# macOS (résidus)
 .DS_Store
 *.swp
