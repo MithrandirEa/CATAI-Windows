@@ -1,10 +1,9 @@
 # Rust build output
 target/
+
+# Distribution archives
 dist/
 
-# Cargo lock — à conserver pour les binaires
-# Cargo.lock
-
-# macOS (résidus)
+# Misc
 .DS_Store
 *.swp
