@@ -39,7 +39,7 @@ mod ollama;
 mod system;
 mod ui;
 
-use app::{AppState, SharedState, WM_CONFIG_CHANGED, WM_MODELS_READY, WM_OLLAMA_DONE, WM_OLLAMA_ERR, WM_OLLAMA_TOKEN, WM_TRAY};
+use app::{AppState, SharedState, WM_CONFIG_CHANGED, WM_FRAMES_READY, WM_MODELS_READY, WM_OLLAMA_DONE, WM_OLLAMA_ERR, WM_OLLAMA_TOKEN, WM_TRAY};
 use cat::{animation::AnimationTable, sprite::load_sprite_bgra, CatInstance};
 use config::{load_config, color_def, TIMER_BEHAVIOR, TIMER_RENDER, TIMER_TASKBAR, WALK_SPEED};
 use system::taskbar::get_taskbar_info;
@@ -247,8 +247,10 @@ unsafe fn init_cats(state: &SharedState, hinstance: HINSTANCE) -> Result<()> {
         );
 
         let mut instance = CatInstance::new(cat_cfg, hwnd, x as f32, y as f32);
-        // Cache du frame initial
+        // Cache du frame initial + état pour éviter un rebuild inutile au premier tick
         instance.cached_frames = vec![(bgra, sw, sh)];
+        instance.cached_state = Some(cat::state::CatState::Idle);
+        instance.cached_dir = Some(cat::state::Direction::South);
         // Créer la bulle de dialogue
         instance.bubble = ui::chat_bubble::ChatBubble::new().ok();
 
@@ -409,6 +411,43 @@ unsafe extern "system" fn msg_wnd_proc(
             // Libérer le Box<String> de l'erreur
             if lparam.0 != 0 {
                 drop(Box::from_raw(lparam.0 as *mut String));
+            }
+            LRESULT(0)
+        }
+
+        // Frames PNG chargées en arrière-plan via tokio, prêtes à être appliquées
+        WM_FRAMES_READY => {
+            use cat::state::{CatState, Direction};
+            if lparam.0 != 0 {
+                let payload = Box::from_raw(
+                    lparam.0 as *mut (usize, CatState, Direction, Vec<(Vec<u8>, u32, u32)>),
+                );
+                let (idx, new_state, new_dir, frames) = *payload;
+                let raw = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+                    hwnd,
+                    windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                );
+                if raw != 0 {
+                    let state = Arc::from_raw(raw as *const Mutex<AppState>);
+                    {
+                        let mut s = state.lock().unwrap();
+                        if let Some(cat) = s.cats.get_mut(idx) {
+                            cat.frames_loading = false;
+                            // Appliquer seulement si le chat est encore dans le même état
+                            if cat.state == new_state && !frames.is_empty() {
+                                let effective_dir = match new_state {
+                                    CatState::Idle | CatState::Sleeping => Direction::South,
+                                    _ => new_dir,
+                                };
+                                cat.cached_frames = frames;
+                                cat.frame_idx = 0;
+                                cat.cached_state = Some(new_state);
+                                cat.cached_dir = Some(effective_dir);
+                            }
+                        }
+                    }
+                    std::mem::forget(state);
+                }
             }
             LRESULT(0)
         }
@@ -690,8 +729,9 @@ unsafe fn on_timer_render(state: &SharedState) {
             };
             cat.cached_state != Some(cat.state) || cat.cached_dir != Some(effective_dir)
         };
-        if needs_rebuild {
-            rebuild_cat_frames(&mut s, i, scale);
+        if needs_rebuild && !s.cats[i].frames_loading {
+            s.cats[i].frames_loading = true;
+            schedule_rebuild_frames(&s, i, scale);
         }
 
         let cat = &mut s.cats[i];
@@ -738,6 +778,60 @@ unsafe fn on_timer_behavior(state: &SharedState) {
 unsafe fn on_timer_taskbar(state: &SharedState) {
     let mut s = state.lock().unwrap();
     s.taskbar = get_taskbar_info();
+}
+
+/// Lance un chargement asynchrone des frames pour un chat.
+/// Les PNGs sont décodés dans le thread-pool tokio ; le résultat est PostMessageé
+/// via WM_FRAMES_READY → aucun blocage du thread UI.
+fn schedule_rebuild_frames(s: &AppState, idx: usize, scale: f32) {
+    use cat::state::Direction;
+    let handle = match s.tokio_handle.as_ref() {
+        Some(h) => h.clone(),
+        None => return,
+    };
+    let msg_hwnd_ptr = s.msg_hwnd.0 as isize;
+    let cat = &s.cats[idx];
+    let cat_state = cat.state;
+    let cat_dir = cat.dir;
+    let color: &'static config::CatColorDef =
+        config::color_def(&cat.color_id).unwrap_or(&config::CAT_COLOR_DEFS[0]);
+
+    // Collecter les chemins de fichier AVANT de lâcher le verrou
+    let paths: Vec<std::path::PathBuf> = match s.anim_table.as_ref() {
+        Some(anim) => {
+            if cat_state.anim_key().is_some() {
+                anim.frames(cat_state, cat_dir).to_vec()
+            } else {
+                anim.rotation(Direction::South)
+                    .map(|p| vec![p.to_path_buf()])
+                    .unwrap_or_default()
+            }
+        }
+        None => return,
+    };
+
+    handle.spawn(async move {
+        // Décodage PNG dans le thread-pool (opération bloquante)
+        let frames: Vec<(Vec<u8>, u32, u32)> = tokio::task::spawn_blocking(move || {
+            paths
+                .iter()
+                .filter_map(|p| cat::sprite::load_sprite_bgra(p, color, scale).ok())
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+
+        let payload = Box::new((idx, cat_state, cat_dir, frames));
+        let raw = Box::into_raw(payload) as isize;
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(msg_hwnd_ptr as *mut core::ffi::c_void)),
+                WM_FRAMES_READY,
+                WPARAM(idx),
+                LPARAM(raw),
+            );
+        }
+    });
 }
 
 /// Reconstruit le cache de frames d'un chat quand son état ou sa direction change.

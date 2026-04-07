@@ -21,6 +21,9 @@ pub const WM_OLLAMA_ERR: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP +
 /// WM_APP + 4 : modèles disponibles reçus depuis tokio.
 pub const WM_MODELS_READY: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 4;
 pub const WM_CONFIG_CHANGED: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5;
+/// WM_APP + 6 : frames précalculées prêtes (chargées depuis tokio).
+/// WPARAM = cat index, LPARAM = Box<(usize, CatState, Direction, Vec<(Vec<u8>,u32,u32)>)> leak.
+pub const WM_FRAMES_READY: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 6;
 
 /// Message tray (uCallbackMessage dans NOTIFYICONDATAW).
 pub const WM_TRAY: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 10;

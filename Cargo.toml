@@ -41,6 +41,12 @@ opt-level = 1          # Accélère le décodage PNG et le tinting HSB en mode d
 [profile.dev.package."image"]
 opt-level = 3          # image crate optimisé même en dev (décodage PNG >> plus rapide)
 
+[profile.dev.package."png"]
+opt-level = 3          # décompresseur PNG
+
+[profile.dev.package."miniz_oxide"]
+opt-level = 3          # décompression deflate utilisée par png
+
 [profile.release]
 opt-level = 3
 lto = true

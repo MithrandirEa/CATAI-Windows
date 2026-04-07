@@ -44,6 +44,8 @@ pub struct CatInstance {
     pub cached_frames: Vec<(Vec<u8>, u32, u32)>,
     pub cached_state: Option<CatState>,
     pub cached_dir: Option<Direction>,
+    /// Chargement async de frames en cours (évite les spawns dupliqués)
+    pub frames_loading: bool,
 }
 
 impl CatInstance {
@@ -66,6 +68,7 @@ impl CatInstance {
             cached_frames: vec![],
             cached_state: None,
             cached_dir: None,
+            frames_loading: false,
         }
     }
 
