@@ -10,6 +10,7 @@ pub const MIN_SCALE: f32 = 0.5;
 pub const MAX_SCALE: f32 = 3.0;
 pub const DEFAULT_SCALE: f32 = 1.0;
 pub const MEM_MAX: usize = 20;
+pub const MAX_CAT_NAME_LEN: usize = 64;
 pub const OLLAMA_URL: &str = "http://localhost:11434";
 
 pub const TIMER_RENDER: usize = 1; // 100ms — 10 FPS

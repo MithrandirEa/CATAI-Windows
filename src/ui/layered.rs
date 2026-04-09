@@ -83,7 +83,7 @@ pub unsafe fn update_layered(
     };
 
     let mut pv_bits: *mut std::ffi::c_void = std::ptr::null_mut();
-    let hbmp = CreateDIBSection(Some(h_mem), &bmi, DIB_RGB_COLORS, &mut pv_bits, None, 0)?;;
+    let hbmp = CreateDIBSection(Some(h_mem), &bmi, DIB_RGB_COLORS, &mut pv_bits, None, 0)?;
 
     // Copie des pixels dans le DIB
     let dst = std::slice::from_raw_parts_mut(pv_bits as *mut u8, (w * h * 4) as usize);

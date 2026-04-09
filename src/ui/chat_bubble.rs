@@ -145,7 +145,7 @@ impl ChatBubble {
         };
 
         let mut pv_bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let hbmp = CreateDIBSection(Some(h_mem), &bmi, DIB_RGB_COLORS, &mut pv_bits, None, 0)?;;
+        let hbmp = CreateDIBSection(Some(h_mem), &bmi, DIB_RGB_COLORS, &mut pv_bits, None, 0)?;
         let h_old_bmp = SelectObject(h_mem, HGDIOBJ(hbmp.0));
 
         // Fond blanc avec alpha 220
@@ -187,7 +187,7 @@ impl ChatBubble {
             Some(&pt_dst), Some(&sz),
             Some(h_mem), Some(&pt_src),
             COLORREF(0), Some(&blend), ULW_ALPHA,
-        )?;;
+        )?;
 
         SelectObject(h_mem, h_old_bmp);
         DeleteObject(HGDIOBJ(hbmp.0));
