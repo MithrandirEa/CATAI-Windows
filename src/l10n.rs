@@ -72,6 +72,15 @@ static STRINGS: std::sync::LazyLock<HashMap<&'static str, HashMap<&'static str, 
             "Mrrp... sin conexión"
         );
         entry!("lang_label", "LANGUE", "LANGUAGE", "IDIOMA");
+        entry!("max_cats", "Chats (max 6) :", "Cats (max 6):", "Gatos (máx 6):");
+        entry!("color_label", "Couleur :", "Color:", "Color:");
+        entry!("add_cat", "+ Ajouter", "+ Add", "+ Agregar");
+        entry!("remove_cat", "- Supprimer", "- Remove", "- Eliminar");
+        entry!("save", "Enregistrer", "Save", "Guardar");
+        entry!("cancel", "Annuler", "Cancel", "Cancelar");
+        entry!("fetch_models", "Récupérer", "Fetch", "Obtener");
+        entry!("clear_mem", "Effacer mémoire", "Clear memory", "Borrar memoria");
+        entry!("available_models", "Modèles disponibles :", "Available models:", "Modelos disponibles:");
         m
     });
 

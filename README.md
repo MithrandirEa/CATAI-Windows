@@ -76,11 +76,13 @@ Output: `target\release\catai.exe`
 
 Click the 🐱 system tray icon → Settings:
 
-- **Language** — 🇫🇷 🇬🇧 🇪🇸 click a flag to switch
-- **Cats** — Click a color bubble to add a cat, click × to remove
-- **Name** — Rename each cat
+- **Language** — FR / EN / ES buttons (labels update to the chosen language)
+- **Cats** — Add (max 6) or remove cats from the list
+- **Name** — Rename each cat (max 64 characters)
+- **Color** — Choose from 6 colors shown with their full localized name
 - **Size** — Slider to scale cats (0.5× – 3.0×)
-- **Ollama model** — Select from your installed models
+- **Ollama model** — Type a model name directly, or click **Fetch** to retrieve the list of installed models from Ollama and select one from the listbox
+- **Clear memory** — Erases the selected cat's conversation history (file + RAM)
 
 ## How It Works
 
@@ -88,8 +90,10 @@ Click the 🐱 system tray icon → Settings:
 - `WS_EX_LAYERED` transparent windows rendered via `UpdateLayeredWindow`
 - Per-pixel BGRA premultiplied bitmaps rendered with GDI `CreateDIBSection`
 - HSB color tinting applied directly on sprite pixels at load time
-- Ollama streaming chat via `reqwest` + `tokio`
-- Conversation memory persisted as JSON in `%APPDATA%\CATAI\`
+- PNG sprites decoded asynchronously in a tokio thread-pool — no UI-thread freeze during animation transitions
+- Ollama streaming chat via a persistent `reqwest::Client` + `tokio` (connection pool reused across all requests)
+- Ollama base URL validated at call time — only `localhost` / `127.0.0.1` / `::1` are accepted
+- Conversation memory (max 20 message pairs) persisted as JSON in `%APPDATA%\CATAI\`
 
 ## Project Structure
 

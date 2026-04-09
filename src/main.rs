@@ -39,7 +39,7 @@ mod ollama;
 mod system;
 mod ui;
 
-use app::{AppState, SharedState, WM_CONFIG_CHANGED, WM_FRAMES_READY, WM_MODELS_READY, WM_OLLAMA_DONE, WM_OLLAMA_ERR, WM_OLLAMA_TOKEN, WM_TRAY};
+use app::{AppState, SharedState, WM_CONFIG_CHANGED, WM_FRAMES_READY, WM_MODELS_READY, WM_MODELS_UPDATED, WM_OLLAMA_DONE, WM_OLLAMA_ERR, WM_OLLAMA_TOKEN, WM_TRAY};
 use cat::{animation::AnimationTable, sprite::load_sprite_bgra, CatInstance};
 use config::{load_config, color_def, TIMER_BEHAVIOR, TIMER_RENDER, TIMER_TASKBAR, WALK_SPEED};
 use system::taskbar::get_taskbar_info;
@@ -352,6 +352,9 @@ unsafe extern "system" fn msg_wnd_proc(
         // Tokens Ollama reçus depuis tokio via PostMessage
         WM_OLLAMA_TOKEN => {
             // LPARAM = Box<(usize, String)> transformé en raw pointer
+            if lparam.0 == 0 {
+                return LRESULT(0);
+            }
             let payload = Box::from_raw(lparam.0 as *mut (usize, String));
             let (idx, token) = *payload;
             let raw = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
@@ -411,6 +414,36 @@ unsafe extern "system" fn msg_wnd_proc(
             // Libérer le Box<String> de l'erreur
             if lparam.0 != 0 {
                 drop(Box::from_raw(lparam.0 as *mut String));
+            }
+            LRESULT(0)
+        }
+
+        // Modèles Ollama récupérés par tokio → stocker + notifier la fenêtre settings
+        WM_MODELS_READY => {
+            if lparam.0 != 0 {
+                let models = Box::from_raw(lparam.0 as *mut Vec<String>);
+                let raw = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+                    hwnd,
+                    windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                );
+                if raw != 0 {
+                    let state = Arc::from_raw(raw as *const Mutex<AppState>);
+                    let settings_hwnd = {
+                        let mut s = state.lock().unwrap();
+                        s.available_models = *models;
+                        s.settings_hwnd
+                    };
+                    std::mem::forget(state);
+                    // Notifier la fenêtre settings si elle est ouverte
+                    if !settings_hwnd.0.is_null() {
+                        let _ = PostMessageW(
+                            Some(settings_hwnd),
+                            WM_MODELS_UPDATED,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -832,68 +865,4 @@ fn schedule_rebuild_frames(s: &AppState, idx: usize, scale: f32) {
             );
         }
     });
-}
-
-/// Reconstruit le cache de frames d'un chat quand son état ou sa direction change.
-/// Charge les sprites depuis le disque pour le nouvel (état, direction).
-fn rebuild_cat_frames(s: &mut AppState, idx: usize, scale: f32) {
-    use cat::state::CatState;
-
-    // Extraire ce dont on a besoin sans emprunt multiple
-    let (cat_state, cat_dir, color_id) = {
-        let cat = &s.cats[idx];
-        (cat.state, cat.dir, cat.color_id.clone())
-    };
-
-    let color = config::color_def(&color_id).unwrap_or(&config::CAT_COLOR_DEFS[0]);
-
-    let frames: Vec<(Vec<u8>, u32, u32)> = {
-        let anim = match s.anim_table.as_ref() {
-            Some(a) => a,
-            None => return,
-        };
-        match cat_state.anim_key() {
-            Some(_) => {
-                // Animation multi-frames (marche, manger, etc.)
-                let paths: Vec<_> = anim.frames(cat_state, cat_dir).to_vec();
-                paths.iter()
-                    .filter_map(|p| cat::sprite::load_sprite_bgra(p, color, scale).ok())
-                    .collect()
-            }
-            None => {
-                // Idle / Sleeping : sprite de rotation statique, toujours face caméra (South)
-                let display_dir = cat::state::Direction::South;
-                let path = anim.rotation(display_dir).map(|p| p.to_path_buf());
-                match path {
-                    Some(p) if p.exists() => cat::sprite::load_sprite_bgra(&p, color, scale)
-                        .ok()
-                        .map(|f| vec![f])
-                        .unwrap_or_default(),
-                    _ => vec![],
-                }
-            }
-        }
-    };
-
-    if !frames.is_empty() {
-        let cat = &mut s.cats[idx];
-        cat.cached_frames = frames;
-        cat.frame_idx = 0;
-        cat.cached_state = Some(cat_state);
-        // Pour Idle/Sleeping on affiche toujours South ; mémoriser South pour éviter rebuild infini
-        cat.cached_dir = Some(match cat_state {
-            CatState::Idle | CatState::Sleeping => cat::state::Direction::South,
-            _ => cat_dir,
-        });
-    }
-}
-
-// Stub minimal — sera remplacé par le crate rand en Phase 3
-mod rand_stub {
-    pub fn random_bool() -> bool {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() % 2 == 0)
-            .unwrap_or(false)
-    }
 }
