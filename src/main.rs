@@ -15,7 +15,7 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
-            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
+            Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW,
                 GetCursorPos, GetMessageW, PostQuitMessage, RegisterClassExW,
@@ -732,7 +732,9 @@ unsafe extern "system" fn cat_wnd_proc(
                     cat.drag_offset_y = cursor.y - cat.y as i32;
                     cat.drag_start_x = cursor.x;
                     cat.drag_start_y = cursor.y;
-                    // Ne PAS mettre is_dragging = true ici — attendre le seuil
+                    // Reset du drag : un WM_MOUSEMOVE antérieur a pu laisser
+                    // is_dragging = true — le remettre à false pour ce nouveau clic.
+                    cat.is_dragging = false;
                     cat.state = cat::state::CatState::Idle;
                     cat.idle_ticks = 0;
                     // Protection immédiate : bloquer on_timer_behavior entre DOWN et UP.
@@ -753,8 +755,9 @@ unsafe extern "system" fn cat_wnd_proc(
                     let scale = s.config.scale as f32;
                     let cat_px = (68.0 * scale) as i32;
                     if let Some(cat) = s.cats.iter_mut().find(|c| c.hwnd == hwnd) {
-                        // Seuil 5 px avant d'activer le drag
-                        if !cat.is_dragging {
+                        // Seuil 10 px avant d'activer le drag — uniquement si
+                        // le bouton gauche est enfoncé (SetCapture actif).
+                        if !cat.is_dragging && GetCapture() == hwnd {
                             let mut cursor = POINT::default();
                             let _ = GetCursorPos(&mut cursor);
                             let dx = (cursor.x - cat.drag_start_x).abs();
@@ -871,6 +874,9 @@ unsafe extern "system" fn cat_wnd_proc(
                 let mut s = state.lock().unwrap();
                 let lang = s.config.lang.clone();
                 s.cats.iter_mut().enumerate().find(|(_, c)| c.hwnd == hwnd).map(|(idx, cat)| {
+                    cat.state = cat::state::CatState::Idle;
+                    cat.idle_ticks = 0;
+                    cat.is_chatting = true;
                     let cx = cat.x as i32;
                     let cy = cat.y as i32;
                     let sz = cat.current_frame().map(|(_, w, _)| *w as i32).unwrap_or(68);
