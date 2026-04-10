@@ -35,10 +35,21 @@ pub struct CatInstance {
     pub is_dragging: bool,
     pub drag_offset_x: i32,
     pub drag_offset_y: i32,
+    /// Position curseur au moment du WM_LBUTTONDOWN (seuil drag 5 px).
+    pub drag_start_x: i32,
+    pub drag_start_y: i32,
+
+    // Cycle comportemental
+    /// Nombre de ticks Idle consécutifs (1 tick = 1 s via TIMER_BEHAVIOR).
+    pub idle_ticks: u32,
+    /// Le chat est en mode conversation — bloque les transitions comportementales.
+    pub is_chatting: bool,
 
     // Chat Ollama window
     pub bubble: Option<crate::ui::chat_bubble::ChatBubble>,
     pub messages: Vec<serde_json::Value>,
+    /// Instant auquel la bulle a été affichée — pour auto-cacher après 8s.
+    pub bubble_shown_at: Option<std::time::Instant>,
 
     // Frames précalculées (BGRA premul) pour l'état courant
     pub cached_frames: Vec<(Vec<u8>, u32, u32)>,
@@ -63,8 +74,13 @@ impl CatInstance {
             is_dragging: false,
             drag_offset_x: 0,
             drag_offset_y: 0,
+            drag_start_x: 0,
+            drag_start_y: 0,
+            idle_ticks: 0,
+            is_chatting: false,
             bubble: None,
             messages: vec![],
+            bubble_shown_at: None,
             cached_frames: vec![],
             cached_state: None,
             cached_dir: None,
