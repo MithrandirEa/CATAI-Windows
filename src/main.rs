@@ -11,18 +11,19 @@ use std::{
 use windows::{
     core::{w, Result, PCWSTR},
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
             Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW,
-                GetCursorPos, GetMessageW, PostQuitMessage, RegisterClassExW,
-                SetTimer, TranslateMessage,
-                CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, MSG, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WNDCLASSEXW, PostMessageW, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_TIMER,
+                GetCursorPos, GetMessageW, GetWindowRect, KillTimer, PostQuitMessage,
+                RegisterClassExW, SetTimer, TranslateMessage,
+                CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, MSG,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, PostMessageW,
+                WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCHITTEST, WM_TIMER,
             },
         },
     },
@@ -39,9 +40,9 @@ mod ollama;
 mod system;
 mod ui;
 
-use app::{AppState, SharedState, WM_CONFIG_CHANGED, WM_DEFERRED_INIT, WM_FRAMES_READY, WM_MODELS_READY, WM_MODELS_UPDATED, WM_OLLAMA_DONE, WM_OLLAMA_ERR, WM_OLLAMA_TOKEN, WM_TRAY, WM_USER_INPUT};
+use app::{AppState, SharedState, WM_CONFIG_CHANGED, WM_DEFERRED_INIT, WM_FRAMES_READY, WM_MODELS_READY, WM_MODELS_UPDATED, WM_OLLAMA_DONE, WM_OLLAMA_ERR, WM_OLLAMA_TOKEN, WM_TASKBAR_UPDATED, WM_TRAY, WM_USER_CANCEL_CHAT, WM_USER_INPUT};
 use cat::{animation::AnimationTable, sprite::load_sprite_bgra, CatInstance};
-use config::{load_config, color_def, TIMER_BEHAVIOR, TIMER_RENDER, TIMER_TASKBAR, WALK_SPEED};
+use config::{load_config, color_def, TIMER_BEHAVIOR, TIMER_CLICK_PAUSE, TIMER_RENDER, TIMER_TASKBAR, WALK_SPEED};
 use system::taskbar::get_taskbar_info;
 use ui::{
     layered::{create_cat_window, resize_cat_dibs, update_layered, update_layered_fast, CAT_CLASS},
@@ -54,7 +55,9 @@ use ui::{
 const MSG_CLASS: PCWSTR = w!("CATAI_Msg");
 const MSG_WND_TITLE: PCWSTR = w!("CATAI_MsgWindow");
 
-/// InputBox unique — créée dans WM_DEFERRED_INIT, accessible depuis n'importe quel callback UI.
+// Message posté au chat lié quand l'utilisateur clique la bulle de dialogue.
+// Toujours traité comme "continuer la conversation" (InputBox directe, pas de meow).
+const WM_BUBBLE_CLICKED: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 14;
 static INPUT_BOX: std::sync::OnceLock<ui::input_box::InputBox> = std::sync::OnceLock::new();
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -181,6 +184,32 @@ unsafe extern "system" fn def_wnd_proc_wrapper(
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
+/// WndProc des fenêtres bulle de dialogue.
+/// Détection de clic via WM_LBUTTONUP — fonctionne car tous les pixels ont alpha > 0
+/// (garanti par la boucle alpha-fix dans render()). WM_NCHITTEST retourne HTCLIENT
+/// pour que les clics soient bien transmis à la fenêtre WS_EX_LAYERED.
+unsafe extern "system" fn bubble_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
+    match msg {
+        WM_NCHITTEST => LRESULT(1), // HTCLIENT — nécessaire pour recevoir les clics souris
+        WM_LBUTTONUP => {
+            // Poster WM_BUBBLE_CLICKED au chat associé (GWLP_USERDATA = cat HWND via link_cat).
+            let cat_hwnd_raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            if cat_hwnd_raw != 0 {
+                let cat_hwnd = HWND(cat_hwnd_raw as *mut core::ffi::c_void);
+                let _ = PostMessageW(Some(cat_hwnd), WM_BUBBLE_CLICKED, WPARAM(0), LPARAM(0));
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
 unsafe fn register_classes(hinstance: HINSTANCE) -> Result<()> {
     // Classe fenêtre message-only
     let mut wc = WNDCLASSEXW {
@@ -198,9 +227,10 @@ unsafe fn register_classes(hinstance: HINSTANCE) -> Result<()> {
     wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     RegisterClassExW(&wc);
 
-    // Classe fenêtre bulle
-    wc.lpfnWndProc = Some(def_wnd_proc_wrapper);
+    // Classe fenêtre bulle — cliquable via bubble_wnd_proc
+    wc.lpfnWndProc = Some(bubble_wnd_proc);
     wc.lpszClassName = ui::chat_bubble::BUBBLE_CLASS;
+    wc.style = CS_HREDRAW | CS_VREDRAW;
     RegisterClassExW(&wc);
 
     // Classe fenêtre de saisie utilisateur
@@ -269,11 +299,14 @@ unsafe fn init_cats(state: &SharedState, hinstance: HINSTANCE) -> Result<()> {
         // Restaurer l'historique de conversation sauvegardé
         instance.messages = config::load_memory(&cat_cfg.id);
         // Cache du frame initial + état pour éviter un rebuild inutile au premier tick
-        instance.cached_frames = vec![(bgra, sw, sh)];
+        instance.cached_frames = vec![std::sync::Arc::new((bgra, sw, sh))];
         instance.cached_state = Some(cat::state::CatState::Idle);
         instance.cached_dir = Some(cat::state::Direction::South);
-        // Créer la bulle de dialogue
+        // Créer la bulle de dialogue et la lier au chat
         instance.bubble = ui::chat_bubble::ChatBubble::new().ok();
+        if let Some(b) = &instance.bubble {
+            b.link_cat(hwnd);
+        }
 
         s.cats.push(instance);
     }
@@ -441,7 +474,7 @@ unsafe extern "system" fn msg_wnd_proc(
                     if let Some(cat) = s.cats.get_mut(idx) {
                         let cx = cat.x as i32;
                         let cy = cat.y as i32;
-                        let sz = cat.current_frame().map(|(_, w, _)| *w as i32).unwrap_or(68);
+                        let sz = cat.current_frame().map(|f| f.1 as i32).unwrap_or(68);
                         let full_text = cat
                             .messages
                             .last()
@@ -457,8 +490,10 @@ unsafe extern "system" fn msg_wnd_proc(
                             cat.bubble_shown_at = Some(std::time::Instant::now());
                             cat.is_chatting = true;
                         }
-                        // Persister l'historique après chaque échange complet
-                        config::save_memory(&cat.id, &cat.messages);
+                        // Persister l'historique hors UI thread pour éviter les freezes I/O.
+                        let cat_id = cat.id.clone();
+                        let msgs = cat.messages.clone();
+                        std::thread::spawn(move || { config::save_memory(&cat_id, &msgs); });
                     }
                 }
                 std::mem::forget(state);
@@ -500,8 +535,10 @@ unsafe extern "system" fn msg_wnd_proc(
                         while cat.messages.len() > config::MEM_MAX * 2 {
                             cat.messages.remove(1);
                         }
-                        // Persister le message utilisateur immédiatement
-                        config::save_memory(&cat.id, &cat.messages);
+                        // Persister le message utilisateur hors UI thread.
+                        let cat_id2 = cat.id.clone();
+                        let msgs2 = cat.messages.clone();
+                        std::thread::spawn(move || { config::save_memory(&cat_id2, &msgs2); });
                         let messages = cat.messages.clone();
                         tokio_handle.map(|h| (messages, model, msg_hwnd_ptr, h))
                     } else {
@@ -563,6 +600,33 @@ unsafe extern "system" fn msg_wnd_proc(
             LRESULT(0)
         }
 
+        // InputBox fermée sans saisie → reprendre le comportement normal du chat.
+        WM_USER_CANCEL_CHAT => {
+            let idx = wparam.0;
+            let raw = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+                hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+            );
+            if raw != 0 {
+                let state = Arc::from_raw(raw as *const Mutex<AppState>);
+                {
+                    let mut s = state.lock().unwrap();
+                    if let Some(cat) = s.cats.get_mut(idx) {
+                        // Ignorer si le timer est encore en attente (InputBox pas encore montrée).
+                        // Evite les annulations parasites arrivant pendant le délai de 500ms.
+                        if !cat.click_input_pending {
+                            cat.is_chatting = false;
+                            if let Some(b) = &mut cat.bubble {
+                                b.hide_and_clear();
+                            }
+                            cat.bubble_shown_at = None;
+                        }
+                    }
+                }
+                std::mem::forget(state);
+            }
+            LRESULT(0)
+        }
+
         // Modèles Ollama récupérés par tokio → stocker + notifier la fenêtre settings
         WM_MODELS_READY => {
             if lparam.0 != 0 {
@@ -617,7 +681,7 @@ unsafe extern "system" fn msg_wnd_proc(
                                     CatState::Idle | CatState::Sleeping => Direction::South,
                                     _ => new_dir,
                                 };
-                                cat.cached_frames = frames;
+                                cat.cached_frames = frames.into_iter().map(std::sync::Arc::new).collect();
                                 cat.frame_idx = 0;
                                 cat.cached_state = Some(new_state);
                                 cat.cached_dir = Some(effective_dir);
@@ -632,6 +696,22 @@ unsafe extern "system" fn msg_wnd_proc(
 
         WM_DESTROY => {
             PostQuitMessage(0);
+            LRESULT(0)
+        }
+
+        // Résultat de get_taskbar_info() calculé dans un thread background.
+        WM_TASKBAR_UPDATED => {
+            if lparam.0 != 0 {
+                let info = Box::from_raw(lparam.0 as *mut Option<system::taskbar::TaskbarInfo>);
+                let raw = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+                    hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                );
+                if raw != 0 {
+                    let state = Arc::from_raw(raw as *const Mutex<AppState>);
+                    state.lock().unwrap().taskbar = *info;
+                    std::mem::forget(state);
+                }
+            }
             LRESULT(0)
         }
 
@@ -737,11 +817,19 @@ unsafe extern "system" fn cat_wnd_proc(
                     cat.is_dragging = false;
                     cat.state = cat::state::CatState::Idle;
                     cat.idle_ticks = 0;
+                    // Sauvegarder is_chatting AVANT de le forcer à true.
+                    // WM_LBUTTONUP utilisera pre_click_chatting pour distinguer
+                    // "conversation déjà active" de "protection drag uniquement".
+                    cat.pre_click_chatting = cat.is_chatting;
                     // Protection immédiate : bloquer on_timer_behavior entre DOWN et UP.
                     // Sera remis à false dans WM_LBUTTONUP si c'était un drag.
                     cat.is_chatting = true;
+                    // Annuler un éventuel timer de délai InputBox en cours.
+                    cat.click_input_pending = false;
                 }
             }
+            // Annuler le timer de délai InputBox s'il tournait depuis un clic précédent.
+            let _ = KillTimer(Some(hwnd), TIMER_CLICK_PAUSE);
             SetCapture(hwnd);
             LRESULT(0)
         }
@@ -779,7 +867,7 @@ unsafe extern "system" fn cat_wnd_proc(
                                     bubble.reposition(new_x, new_y, cat_px);
                                 }
                             }
-                            cat.current_frame().map(|(bgra, w, h)| (bgra.clone(), *w, *h, new_x, new_y))
+                            cat.current_frame().map(|f| (Arc::clone(f), new_x, new_y))
                         } else {
                             None
                         }
@@ -787,8 +875,8 @@ unsafe extern "system" fn cat_wnd_proc(
                         None
                     }
                 };
-                if let Some((bgra, w, h, new_x, new_y)) = frame_data {
-                    let _ = update_layered(hwnd, &bgra, w, h, new_x, new_y);
+                if let Some((frame, new_x, new_y)) = frame_data {
+                    let _ = update_layered(hwnd, &frame.0, frame.1, frame.2, new_x, new_y);
                 }
             }
             LRESULT(0)
@@ -801,6 +889,7 @@ unsafe extern "system" fn cat_wnd_proc(
                 let was_dragging;
                 let click_params;
                 let frame_data;
+                let mut start_click_timer = false;
                 {
                     let mut s = state.lock().unwrap();
                     let scale = s.config.scale as f32;
@@ -828,23 +917,42 @@ unsafe extern "system" fn cat_wnd_proc(
                                     bubble.reposition(new_x, new_y, cat_px);
                                 }
                             }
-                            frame_data = cat.current_frame().map(|(bgra, w, h)| (bgra.clone(), *w, *h, new_x, new_y));
+                            frame_data = cat.current_frame().map(|f| (Arc::clone(f), new_x, new_y));
                             click_params = None;
                         } else {
-                            // Clic simple → arrêt + meow + InputBox
+                            // Clic sur un chat actif ou inactif
                             cat.state = cat::state::CatState::Idle;
                             cat.idle_ticks = 0;
-                            cat.is_chatting = true;
                             let cx = cat.x as i32;
                             let cy = cat.y as i32;
-                            let sz = cat.current_frame().map(|(_, w, _)| *w as i32).unwrap_or(68);
-                            if let Some(b) = &mut cat.bubble {
-                                b.hide_and_clear();
-                                let _ = b.append(l10n::L10n::random_meow(&lang), cx, cy, sz);
+                            let sz = cat.current_frame().map(|f| f.1 as i32).unwrap_or(68);
+
+                            if cat.pre_click_chatting {
+                                // Conversation déjà active avant ce clic → rouvrir l'InputBox
+                                // directement, sans meow ni délai. Réinitialiser bubble_shown_at
+                                // pour éviter la race condition avec on_timer_behavior (~8s).
+                                cat.bubble_shown_at = None;
+                                cat.click_input_pending = false;
+                                if let Some(b) = &mut cat.bubble {
+                                    b.hide_and_clear();
+                                }
+                                frame_data = None;
+                                click_params = Some((idx, cx, cy, sz));
+                                start_click_timer = false;
+                            } else {
+                                // Nouvelle conversation → meow + délai 500ms avant InputBox
+                                cat.is_chatting = true;
+                                cat.click_input_pending = true;
+                                if let Some(b) = &mut cat.bubble {
+                                    b.hide_and_clear();
+                                    let _ = b.append(l10n::L10n::random_meow(&lang), cx, cy, sz);
+                                }
+                                // bubble_shown_at initialisé dans TIMER_CLICK_PAUSE pour démarrer
+                                // le compte à rebours 8s seulement quand l'InputBox est visible.
+                                frame_data = None;
+                                click_params = None;
+                                start_click_timer = true;
                             }
-                            cat.bubble_shown_at = Some(std::time::Instant::now());
-                            frame_data = None;
-                            click_params = Some((idx, cx, cy, sz));
                         }
                     } else {
                         was_dragging = false;
@@ -853,20 +961,58 @@ unsafe extern "system" fn cat_wnd_proc(
                     }
                 }
                 // Mutex relâché — appels hors du verrou
-                if let Some((bgra, w, h, new_x, new_y)) = frame_data {
-                    let _ = update_layered(hwnd, &bgra, w, h, new_x, new_y);
+                if let Some((frame, new_x, new_y)) = frame_data {
+                    let _ = update_layered(hwnd, &frame.0, frame.1, frame.2, new_x, new_y);
                 }
                 if let Some((idx, cx, cy, sz)) = click_params {
                     if let Some(ib) = INPUT_BOX.get() {
                         ib.show(cx, cy, sz, idx);
                     }
                 }
+                if start_click_timer {
+                    // Afficher l'InputBox après 500ms pour laisser le chat s'arrêter.
+                    let _ = SetTimer(Some(hwnd), TIMER_CLICK_PAUSE, 500, None);
+                }
                 let _ = was_dragging; // suppress unused warning
             }
             LRESULT(0)
         }
 
+        // ── Clic sur la bulle de dialogue → toujours InputBox directe ─────────
+        // Envoyé par bubble_wnd_proc. La bulle n'existe que lorsqu'une conversation
+        // est active, donc on n'a pas besoin de passer par meow + délai.
+        x if x == WM_BUBBLE_CLICKED => {
+            let _ = KillTimer(Some(hwnd), TIMER_CLICK_PAUSE);
+            let show_params = if let Some(state) = borrow_state!(hwnd) {
+                let mut s = state.lock().unwrap();
+                let scale = s.config.scale as f32;
+                let cat_px = (68.0 * scale) as i32;
+                s.cats.iter_mut().enumerate().find(|(_, c)| c.hwnd == hwnd).map(|(idx, cat)| {
+                    cat.is_chatting = true;
+                    cat.click_input_pending = false;
+                    cat.bubble_shown_at = None;
+                    if let Some(b) = &mut cat.bubble {
+                        b.hide_and_clear();
+                    }
+                    let cx = cat.x as i32;
+                    let cy = cat.y as i32;
+                    let sz = cat.current_frame().map(|f| f.1 as i32).unwrap_or(cat_px);
+                    (idx, cx, cy, sz)
+                })
+            } else {
+                None
+            };
+            if let Some((idx, cx, cy, sz)) = show_params {
+                if let Some(ib) = INPUT_BOX.get() {
+                    ib.show(cx, cy, sz, idx);
+                }
+            }
+            LRESULT(0)
+        }
+
         WM_LBUTTONDBLCLK => {
+            // Annuler le timer de délai InputBox si un double-clic intervient avant 2s.
+            let _ = KillTimer(Some(hwnd), TIMER_CLICK_PAUSE);
             // Collecter les infos sous verrou, puis relâcher AVANT d'appeler show().
             // ShowWindow/SetForegroundWindow envoient des messages Win32 synchrones
             // qui pourraient tenter de re-verrouiller l'AppState → deadlock.
@@ -877,9 +1023,10 @@ unsafe extern "system" fn cat_wnd_proc(
                     cat.state = cat::state::CatState::Idle;
                     cat.idle_ticks = 0;
                     cat.is_chatting = true;
+                    cat.click_input_pending = false;
                     let cx = cat.x as i32;
                     let cy = cat.y as i32;
-                    let sz = cat.current_frame().map(|(_, w, _)| *w as i32).unwrap_or(68);
+                    let sz = cat.current_frame().map(|f| f.1 as i32).unwrap_or(68);
                     if let Some(b) = &mut cat.bubble {
                         b.hide_and_clear();
                         let _ = b.append(l10n::L10n::random_meow(&lang), cx, cy, sz);
@@ -898,6 +1045,46 @@ unsafe extern "system" fn cat_wnd_proc(
             }
             LRESULT(0)
         }
+
+        // ── Timer de délai InputBox : afficher l'InputBox 2s après un clic simple ──
+        WM_TIMER => {
+            if wparam.0 == TIMER_CLICK_PAUSE {
+                let _ = KillTimer(Some(hwnd), TIMER_CLICK_PAUSE);
+                let show_params = if let Some(state) = borrow_state!(hwnd) {
+                    let mut s = state.lock().unwrap();
+                    let scale = s.config.scale as f32;
+                    let cat_px = (68.0 * scale) as i32;
+                    s.cats.iter_mut().enumerate()
+                        .find(|(_, c)| c.hwnd == hwnd)
+                        .and_then(|(idx, cat)| {
+                            if cat.is_chatting && cat.click_input_pending {
+                                cat.click_input_pending = false;
+                                // Démarrer le compte à rebours 8s à partir de l'affichage
+                                // de l'InputBox (et non du clic).
+                                cat.bubble_shown_at = Some(std::time::Instant::now());
+                                let cx = cat.x as i32;
+                                let cy = cat.y as i32;
+                                let sz = cat.current_frame()
+                                    .map(|f| f.1 as i32)
+                                    .unwrap_or(cat_px);
+                                Some((idx, cx, cy, sz))
+                            } else {
+                                cat.click_input_pending = false;
+                                None
+                            }
+                        })
+                } else {
+                    None
+                };
+                if let Some((idx, cx, cy, sz)) = show_params {
+                    if let Some(ib) = INPUT_BOX.get() {
+                        ib.show(cx, cy, sz, idx);
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+
         WM_DESTROY => {
             // Libérer l'Arc si présent
             let raw = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
@@ -924,7 +1111,7 @@ unsafe fn on_timer_render(state: &SharedState) {
     use cat::state::CatState;
 
     // ── Phase 1 : mettre à jour l'état sous verrou, collecter les données à rendre ──
-    let render_jobs: Vec<(usize, HWND, Vec<u8>, u32, u32, i32, i32)> = {
+    let render_jobs: Vec<(usize, HWND, std::sync::Arc<(Vec<u8>, u32, u32)>, i32, i32)> = {
         let mut s = state.lock().unwrap();
         let scale = s.config.scale as f32;
         let cat_px = (68.0 * scale) as i32;
@@ -976,19 +1163,16 @@ unsafe fn on_timer_render(state: &SharedState) {
             let moved = cat.state == CatState::Walking;
 
             // Repositionner la bulle à chaque tick — reposition() est un no-op
-            // si le chat n'a pas bougé (grâce au cache last_cat_x/last_cat_y).
-            if cat.bubble_shown_at.is_some() {
-                let bx = cat.x as i32;
-                let by = cat.y as i32;
-                if let Some(bubble) = &mut cat.bubble {
-                    bubble.reposition(bx, by, cat_px);
-                }
+            // si le chat n'a pas bougé ou si la bulle n'a pas de contenu
+            // (les gardes dans ChatBubble::reposition vérifient last_h, text et position).
+            if let Some(bubble) = &mut cat.bubble {
+                bubble.reposition(cat.x as i32, cat.y as i32, cat_px);
             }
 
             if cat.tick_frame() || moved {
-                if let Some((bgra, w, h)) = cat.current_frame() {
-                    // Cloner les données nécessaires pour le rendu hors verrou
-                    jobs.push((i, cat.hwnd, bgra.clone(), *w, *h, cat.x as i32, cat.y as i32));
+                if let Some(frame) = cat.current_frame() {
+                    // Arc::clone évite le clone des pixels (~20KB) — partage de la référence.
+                    jobs.push((i, cat.hwnd, std::sync::Arc::clone(frame), cat.x as i32, cat.y as i32));
                 }
             }
         }
@@ -996,9 +1180,9 @@ unsafe fn on_timer_render(state: &SharedState) {
     }; // ← verrou libéré ici
 
     // ── Phase 2 : appels GDI hors verrou ─────────────────────────────────────
-    for (cat_idx, hwnd, bgra, w, h, x, y) in render_jobs {
+    for (cat_idx, hwnd, frame, x, y) in render_jobs {
         // Utilise le DIB persistant (pas de CreateDIBSection sur le chemin chaud)
-        let _ = update_layered_fast(hwnd, &bgra, w, h, x, y, cat_idx);
+        let _ = update_layered_fast(hwnd, &frame.0, frame.1, frame.2, x, y, cat_idx);
     }
 }
 
@@ -1057,8 +1241,21 @@ unsafe fn on_timer_behavior(state: &SharedState) {
 }
 
 unsafe fn on_timer_taskbar(state: &SharedState) {
-    let mut s = state.lock().unwrap();
-    s.taskbar = get_taskbar_info();
+    let msg_hwnd_ptr = state.lock().unwrap().msg_hwnd.0 as isize;
+    // SHAppBarMessage peut bloquer si Explorer est occupé → exécuter hors UI thread.
+    std::thread::spawn(move || {
+        let info = get_taskbar_info();
+        let payload = Box::new(info);
+        let raw = Box::into_raw(payload) as isize;
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(msg_hwnd_ptr as *mut core::ffi::c_void)),
+                WM_TASKBAR_UPDATED,
+                WPARAM(0),
+                LPARAM(raw),
+            );
+        }
+    });
 }
 
 /// Lance un chargement des frames PNG dans un thread std (pas de tokio).
