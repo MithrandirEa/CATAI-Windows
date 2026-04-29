@@ -35,7 +35,7 @@ pub struct CatInstance {
     pub is_dragging: bool,
     pub drag_offset_x: i32,
     pub drag_offset_y: i32,
-    /// Position curseur au moment du WM_LBUTTONDOWN (seuil drag 5 px).
+    /// Position curseur au moment du WM_LBUTTONDOWN (seuil drag DRAG_THRESHOLD px).
     pub drag_start_x: i32,
     pub drag_start_y: i32,
 
@@ -44,6 +44,11 @@ pub struct CatInstance {
     pub idle_ticks: u32,
     /// Le chat est en mode conversation — bloque les transitions comportementales.
     pub is_chatting: bool,
+    /// Valeur de `is_chatting` sauvegardée au WM_LBUTTONDOWN (lue dans WM_LBUTTONUP
+    /// pour distinguer "conversation déjà active" de "protection drag uniquement").
+    pub pre_click_chatting: bool,
+    /// Un timer TIMER_CLICK_PAUSE est en attente d'afficher l'InputBox.
+    pub click_input_pending: bool,
 
     // Chat Ollama window
     pub bubble: Option<crate::ui::chat_bubble::ChatBubble>,
@@ -78,6 +83,8 @@ impl CatInstance {
             drag_start_y: 0,
             idle_ticks: 0,
             is_chatting: false,
+            pre_click_chatting: false,
+            click_input_pending: false,
             bubble: None,
             messages: vec![],
             bubble_shown_at: None,
