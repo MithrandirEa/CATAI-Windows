@@ -302,10 +302,16 @@ unsafe fn init_cats(state: &SharedState, hinstance: HINSTANCE) -> Result<()> {
         instance.cached_frames = vec![(bgra, sw, sh)];
         instance.cached_state = Some(cat::state::CatState::Idle);
         instance.cached_dir = Some(cat::state::Direction::South);
-        // Créer la bulle de dialogue et la lier au chat
+        // Créer la bulle de dialogue et stocker le HWND du chat dans le
+        // GWLP_USERDATA de la bulle pour que son wndproc puisse émettre
+        // WM_BUBBLE_CLICKED vers la bonne fenêtre chat.
         instance.bubble = ui::chat_bubble::ChatBubble::new().ok();
         if let Some(b) = &instance.bubble {
-            b.link_cat(hwnd);
+            windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+                b.hwnd,
+                windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                hwnd.0 as isize,
+            );
         }
 
         s.cats.push(instance);
