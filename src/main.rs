@@ -55,6 +55,9 @@ use ui::{
 const MSG_CLASS: PCWSTR = w!("CATAI_Msg");
 const MSG_WND_TITLE: PCWSTR = w!("CATAI_MsgWindow");
 
+/// Seuil en pixels au-delà duquel un déplacement souris est considéré comme un drag.
+const DRAG_THRESHOLD: i32 = 10;
+
 // Message posté au chat lié quand l'utilisateur clique la bulle de dialogue.
 // Toujours traité comme "continuer la conversation" (InputBox directe, pas de meow).
 const WM_BUBBLE_CLICKED: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 14;
@@ -807,7 +810,7 @@ unsafe extern "system" fn cat_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        // ── Début potentiel du drag — seuil 5 px ─────────────────────────────
+        // ── Début potentiel du drag — seuil DRAG_THRESHOLD px ───────────────
         WM_LBUTTONDOWN => {
             if let Some(state) = borrow_state!(hwnd) {
                 let mut cursor = POINT::default();
@@ -840,7 +843,7 @@ unsafe extern "system" fn cat_wnd_proc(
             LRESULT(0)
         }
 
-        // ── Déplacement pendant le drag (activé après seuil 5 px) ──────────
+        // ── Déplacement pendant le drag (activé après DRAG_THRESHOLD px) ────
         WM_MOUSEMOVE => {
             if let Some(state) = borrow_state!(hwnd) {
                 // Extraire données sous verrou, puis libérer avant d'appeler update_layered
@@ -849,14 +852,13 @@ unsafe extern "system" fn cat_wnd_proc(
                     let scale = s.config.scale as f32;
                     let cat_px = (68.0 * scale) as i32;
                     if let Some(cat) = s.cats.iter_mut().find(|c| c.hwnd == hwnd) {
-                        // Seuil 10 px avant d'activer le drag — uniquement si
-                        // le bouton gauche est enfoncé (SetCapture actif).
+                        // Activer le drag une fois le seuil DRAG_THRESHOLD atteint.
                         if !cat.is_dragging && GetCapture() == hwnd {
                             let mut cursor = POINT::default();
                             let _ = GetCursorPos(&mut cursor);
                             let dx = (cursor.x - cat.drag_start_x).abs();
                             let dy = (cursor.y - cat.drag_start_y).abs();
-                            if dx > 10 || dy > 10 {
+                            if dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD {
                                 cat.is_dragging = true;
                             }
                         }
