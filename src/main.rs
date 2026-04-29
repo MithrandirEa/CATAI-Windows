@@ -299,7 +299,7 @@ unsafe fn init_cats(state: &SharedState, hinstance: HINSTANCE) -> Result<()> {
         // Restaurer l'historique de conversation sauvegardé
         instance.messages = config::load_memory(&cat_cfg.id);
         // Cache du frame initial + état pour éviter un rebuild inutile au premier tick
-        instance.cached_frames = vec![std::sync::Arc::new((bgra, sw, sh))];
+        instance.cached_frames = vec![(bgra, sw, sh)];
         instance.cached_state = Some(cat::state::CatState::Idle);
         instance.cached_dir = Some(cat::state::Direction::South);
         // Créer la bulle de dialogue et la lier au chat
